@@ -122,6 +122,7 @@ struct Socket {
 
         char **symlinks;
 
+        unsigned reuse_port_pool;
         bool accept;
         bool remove_on_stop;
         bool writable;
