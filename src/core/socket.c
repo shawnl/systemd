@@ -227,14 +227,16 @@ int socket_instantiate_service(Socket *s) {
         assert(s);
 
         /* This fills in s->service if it isn't filled in yet. For
-         * Accept=yes sockets we create the next connection service
-         * here. For Accept=no this is mostly a NOP since the service
-         * is figured out at load time anyway. */
+         * Accept=yes and ReusePortPool= sockets we create the next
+         * connection service here. For Accept=no and ReusePortPool=0
+         * this is mostly a NOP since the service is figured out at
+         * load time anyway. */
 
         if (UNIT_DEREF(s->service))
                 return 0;
 
-        if (!s->accept)
+        if (!(s->accept ||
+             (s->reuse_port_pool > 0)))
                 return 0;
 
         r = unit_name_to_prefix(UNIT(s)->id, &prefix);
@@ -366,7 +368,7 @@ static int socket_add_extras(Socket *s) {
                         s->trigger_limit.burst = 20;
         }
 
-        if (have_non_accept_socket(s)) {
+        if (have_non_accept_socket(s) && s->reuse_port_pool == 0) {
 
                 if (!UNIT_DEREF(s->service)) {
                         Unit *x;
@@ -467,6 +469,11 @@ static int socket_verify(Socket *s) {
 
         if (s->accept && UNIT_DEREF(s->service)) {
                 log_unit_error(UNIT(s), "Explicit service configuration for accepting socket units not supported. Refusing.");
+                return -EINVAL;
+        }
+
+        if (s->accept && s->reuse_port_pool > 0) {
+                log_unit_error(UNIT(s), "Accept=true incompatible with ReusePortPool=. Refusing.");
                 return -EINVAL;
         }
 
@@ -718,6 +725,16 @@ static void socket_dump(Unit *u, FILE *f, const char *prefix) {
                         prefix, s->n_accepted,
                         prefix, s->n_connections,
                         prefix, s->max_connections);
+
+        if (s->reuse_port_pool > 0)
+                fprintf(f,
+                        "%sReusePortPoolMax: %u\n"
+                        "%sReusePortPoolCur: %u\n"
+                        "%sReusePortListening: %s\n",
+                        prefix, s->reuse_port_pool,
+                        prefix, s->n_connections,
+                        //TODO check that this works instead of assuming
+                        prefix, yes_no(s->reuse_port_pool > s->n_connections));
 
         if (s->priority >= 0)
                 fprintf(f,
@@ -1469,7 +1486,7 @@ static int socket_address_listen_do(
                         s->backlog,
                         s->bind_ipv6_only,
                         s->bind_to_device,
-                        s->reuse_port,
+                        ((s->reuse_port_pool > 0) || s->reuse_port),
                         s->free_bind,
                         s->transparent,
                         s->directory_mode,
@@ -2291,28 +2308,30 @@ static void socket_enter_running(Socket *s, int cfd) {
                 _cleanup_(socket_peer_unrefp) SocketPeer *p = NULL;
                 Service *service;
 
-                if (s->n_connections >= s->max_connections) {
-                        log_unit_warning(UNIT(s), "Too many incoming connections (%u), dropping connection.",
-                                         s->n_connections);
-                        safe_close(cfd);
-                        return;
-                }
+                if (s->accept == true) {
+                        if (s->n_connections >= s->max_connections) {
+                                log_unit_warning(UNIT(s), "Too many incoming connections (%u), dropping connection.",
+                                               s->n_connections);
+                                 safe_close(cfd);
+                                 return;
+                        }
 
-                if (s->max_connections_per_source > 0) {
-                        r = socket_acquire_peer(s, cfd, &p);
-                        if (r < 0) {
-                                safe_close(cfd);
-                                return;
-                        } else if (r > 0 && p->n_ref > s->max_connections_per_source) {
-                                _cleanup_free_ char *t = NULL;
+                        if (s->max_connections_per_source > 0) {
+                                r = socket_acquire_peer(s, cfd, &p);
+                                if (r < 0) {
+                                        safe_close(cfd);
+                                        return;
+                                } else if (r > 0 && p->n_ref > s->max_connections_per_source) {
+                                        _cleanup_free_ char *t = NULL;
 
-                                (void) sockaddr_pretty(&p->peer.sa, p->peer_salen, true, false, &t);
+                                        (void) sockaddr_pretty(&p->peer.sa, FAMILY_ADDRESS_SIZE(p->peer.sa.sa_family), true, false, &t);
 
-                                log_unit_warning(UNIT(s),
-                                                 "Too many incoming connections (%u) from source %s, dropping connection.",
-                                                 p->n_ref, strnull(t));
-                                safe_close(cfd);
-                                return;
+                                        log_unit_warning(UNIT(s),
+                                                         "Too many incoming connections (%u) from source %s, dropping connection.",
+                                                         p->n_ref, strnull(t));
+                                        safe_close(cfd);
+                                        return;
+                                }
                         }
                 }
 
@@ -2320,7 +2339,13 @@ static void socket_enter_running(Socket *s, int cfd) {
                 if (r < 0)
                         goto fail;
 
-                r = instance_from_socket(cfd, s->n_accepted, &instance);
+                if (s->reuse_port_pool > 0) {
+                        r = asprintf(&instance,
+                                        "%u",
+                                        s->n_connections);
+                } else {
+                        r = instance_from_socket(cfd, s->n_accepted, &instance);
+                }
                 if (r < 0) {
                         if (r != -ENOTCONN)
                                 goto fail;
@@ -2915,6 +2940,26 @@ static int socket_dispatch_io(sd_event_source *source, int fd, uint32_t revents,
                 socket_apply_socket_options(p->socket, cfd);
         }
 
+        if (p->socket->reuse_port_pool > 0) {
+                Socket *s = p->socket;
+
+                cfd = fcntl(fd, F_DUPFD_CLOEXEC, 3);
+                if (cfd < 0)
+                        goto fail;
+
+                if (s->reuse_port_pool >= s->n_connections) {
+                        /* Have not reached pool size. Continue listening. */
+                } else {
+                        log_unit_debug(UNIT(s), "Max ReusePort pool size %u reached (%u connections). "\
+                                                "Closing fd and waiting for child to quit.",
+                                                s->reuse_port_pool, s->n_connections + 1);
+
+                        socket_set_state(s, SOCKET_RUNNING);
+                        /* This calls socket_unwatch_fds(s). */
+                        socket_close_fds(s);
+                }
+        }
+
         socket_enter_running(p->socket, cfd);
         return 0;
 
@@ -3140,13 +3185,22 @@ void socket_connection_unref(Socket *s) {
 
         /* The service is dead. Yay!
          *
-         * This is strictly for one-instance-per-connection
-         * services. */
+         * This is for one-instance-per-connection
+         * services (Accept=yes) and SO_REUSEPORT pools (ReusePortPool). */
 
         assert(s->n_connections > 0);
         s->n_connections--;
 
         log_unit_debug(UNIT(s), "One connection closed, %u left.", s->n_connections);
+
+        if (s->state == SOCKET_RUNNING) {
+                /* This only happens when ReusePortPool= is set. We
+                   unwatched the listening socket in socket_dispatch_io(). */
+                log_unit_debug(UNIT(s), "Under ReusePortPool size %u. Listening again.", s->reuse_port_pool);
+                socket_open_fds(s);
+                socket_enter_listening(s);
+        }
+
 }
 
 static void socket_trigger_notify(Unit *u, Unit *other) {

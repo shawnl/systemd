@@ -363,8 +363,7 @@ int socket_address_print(const SocketAddress *a, char **ret) {
 bool socket_address_can_accept(const SocketAddress *a) {
         assert(a);
 
-        return
-                IN_SET(a->type, SOCK_STREAM, SOCK_SEQPACKET);
+        return IN_SET(a->type, SOCK_STREAM, SOCK_SEQPACKET);
 }
 
 bool socket_address_equal(const SocketAddress *a, const SocketAddress *b) {

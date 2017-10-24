@@ -1294,15 +1294,16 @@ static int service_spawn(
                 union sockaddr_union sa;
                 socklen_t salen = sizeof(sa);
 
-                r = getpeername(s->socket_fd, &sa.sa, &salen);
+        /* I'm getting strange looping behavior with _SERVICE_EXEC_COMMAND_INVALID and ENOTCONN */
+                /*r = getpeername(s->socket_fd, &sa.sa, &salen);
                 if (r < 0) {
                         r = -errno;
 
                         /* ENOTCONN is legitimate if the endpoint disappeared on shutdown.
-                         * This connection is over, but the socket unit lives on. */
+                         * This connection is over, but the socket unit lives on. /
                         if (r != -ENOTCONN || !IN_SET(s->control_command_id, SERVICE_EXEC_STOP, SERVICE_EXEC_STOP_POST))
                                 return r;
-                }
+                }*/
 
                 if (r == 0 && IN_SET(sa.sa.sa_family, AF_INET, AF_INET6, AF_VSOCK)) {
                         _cleanup_free_ char *addr = NULL;
