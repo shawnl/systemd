@@ -441,7 +441,7 @@ static int add_raw_socket(RemoteServer *s, int fd) {
 static int setup_raw_socket(RemoteServer *s, const char *address) {
         int fd;
 
-        fd = make_socket_fd(LOG_INFO, address, SOCK_STREAM, SOCK_CLOEXEC);
+        fd = make_socket_fd(LOG_INFO, address, SOCK_STREAM, SOCK_CLOEXEC, false);
         if (fd < 0)
                 return fd;
 
@@ -770,7 +770,7 @@ static int setup_microhttpd_socket(RemoteServer *s,
                                    const char *trust) {
         int fd;
 
-        fd = make_socket_fd(LOG_DEBUG, address, SOCK_STREAM, SOCK_CLOEXEC);
+        fd = make_socket_fd(LOG_DEBUG, address, SOCK_STREAM, SOCK_CLOEXEC, false);
         if (fd < 0)
                 return fd;
 

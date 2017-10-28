@@ -141,7 +141,7 @@ int socket_address_listen(
         return r;
 }
 
-int make_socket_fd(int log_level, const char* address, int type, int flags) {
+int make_socket_fd(int log_level, const char* address, int type, int flags, bool reuse_port) {
         SocketAddress a;
         int fd, r;
 
@@ -152,7 +152,7 @@ int make_socket_fd(int log_level, const char* address, int type, int flags) {
         a.type = type;
 
         fd = socket_address_listen(&a, type | flags, SOMAXCONN, SOCKET_ADDRESS_DEFAULT,
-                                   NULL, false, false, false, 0755, 0644, NULL);
+                                   NULL, reuse_port, false, false, 0755, 0644, NULL);
         if (fd < 0 || log_get_max_level() >= log_level) {
                 _cleanup_free_ char *p = NULL;
 

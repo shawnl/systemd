@@ -44,6 +44,7 @@ static char** arg_args = NULL;
 static char** arg_setenv = NULL;
 static char **arg_fdnames = NULL;
 static bool arg_inetd = false;
+static bool arg_reuse_port = false;
 
 static int add_epoll(int epoll_fd, int fd) {
         struct epoll_event ev = {
@@ -99,7 +100,7 @@ static int open_sockets(int *epoll_fd, bool accept) {
          */
 
         STRV_FOREACH(address, arg_listen) {
-                fd = make_socket_fd(LOG_DEBUG, *address, arg_socket_type, (arg_accept*SOCK_CLOEXEC));
+                fd = make_socket_fd(LOG_DEBUG, *address, arg_socket_type, (arg_accept*SOCK_CLOEXEC), arg_reuse_port);
                 if (fd < 0) {
                         log_open();
                         return log_error_errno(fd, "Failed to open '%s': %m", *address);
@@ -139,9 +140,14 @@ static int exec_process(const char* name, char **argv, char **env, int start_fd,
         char **s;
         int r;
 
-        if (arg_inetd && n_fds != 1) {
-                log_error("--inetd only supported for single file descriptors.");
-                return -EINVAL;
+        if (arg_inetd || arg_reuse_port) {
+                if  (n_fds != 1) {
+                        log_error("--inetd and --reuse-port only supported for single file descriptors.");
+                        return -EINVAL;
+                } else if (arg_inetd && arg_reuse_port) {
+                        log_error("--inetd and --reuse-port incompatible.");
+                        return -EINVAL;
+                }
         }
 
         length = strv_length(arg_setenv);
@@ -366,6 +372,7 @@ static void help(void) {
                "  -E --setenv=NAME[=VALUE]   Pass an environment variable to children\n"
                "     --fdname=NAME[:NAME...] Specify names for file descriptors\n"
                "     --inetd                 Enable inetd file descriptor passing protocol\n"
+               "     --reuse-port            Activate a pool with SO_REUSEPORT\n"
                "\n"
                "Note: file descriptors from sd_listen_fds() will be passed through.\n"
                , program_invocation_short_name);
@@ -377,6 +384,7 @@ static int parse_argv(int argc, char *argv[]) {
                 ARG_FDNAME,
                 ARG_SEQPACKET,
                 ARG_INETD,
+                ARG_REUSE_PORT,
         };
 
         static const struct option options[] = {
@@ -390,6 +398,7 @@ static int parse_argv(int argc, char *argv[]) {
                 { "environment", required_argument, NULL, 'E'           }, /* legacy alias */
                 { "fdname",      required_argument, NULL, ARG_FDNAME    },
                 { "inetd",       no_argument,       NULL, ARG_INETD     },
+                { "reuse-port",  no_argument,       NULL, ARG_REUSE_PORT},
                 {}
         };
 
@@ -470,6 +479,10 @@ static int parse_argv(int argc, char *argv[]) {
 
                 case ARG_INETD:
                         arg_inetd = true;
+                        break;
+
+                case ARG_REUSE_PORT:
+                        arg_reuse_port = true;
                         break;
 
                 case '?':
