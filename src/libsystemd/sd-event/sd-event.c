@@ -2499,7 +2499,8 @@ pending:
         return r;
 }
 
-_public_ int sd_event_wait(sd_event *e, uint64_t timeout) {
+int sd_event_wait3(sd_event *e, uint64_t timeout, bool killme);
+int sd_event_wait3(sd_event *e, uint64_t timeout, bool killme) {
         struct epoll_event *ev_queue;
         unsigned ev_queue_max;
         int r, m, i;
@@ -2517,8 +2518,17 @@ _public_ int sd_event_wait(sd_event *e, uint64_t timeout) {
         ev_queue_max = MAX(e->n_sources, 1u);
         ev_queue = newa(struct epoll_event, ev_queue_max);
 
-        m = epoll_wait(e->epoll_fd, ev_queue, ev_queue_max,
+        if (killme == false)
+                /* Work with old kernels without epoll_wait5() */
+                m = epoll_wait(e->epoll_fd, ev_queue, ev_queue_max,
                        timeout == (uint64_t) -1 ? -1 : (int) ((timeout + USEC_PER_MSEC - 1) / USEC_PER_MSEC));
+        else
+                /*m = epoll_wait5(e->epoll_fd, ev_queue, ev_queue_max,
+                       timeout == (uint64_t) -1 ? -1 : (int) ((timeout + USEC_PER_MSEC - 1) / USEC_PER_MSEC),
+                       killme ? EPOLL_KILLME : 0);*/
+                m = syscall(__NR_epoll_wait5, e->epoll_fd, ev_queue, ev_queue_max,
+                       timeout == (uint64_t) -1 ? -1 : (int) ((timeout + USEC_PER_MSEC - 1) / USEC_PER_MSEC),
+                       1);
         if (m < 0) {
                 if (errno == EINTR) {
                         e->state = SD_EVENT_PENDING;
@@ -2606,6 +2616,15 @@ finish:
         return r;
 }
 
+_public_ int sd_event_wait(sd_event *e, uint64_t timeout) {
+        return sd_event_wait3(e, timeout, false);
+
+}
+
+_public_ int sd_event_wait_killme(sd_event *e, uint64_t timeout) {
+        return sd_event_wait3(e, timeout, true);
+}
+
 _public_ int sd_event_dispatch(sd_event *e) {
         sd_event_source *p;
         int r;
@@ -2648,7 +2667,8 @@ static void event_log_delays(sd_event *e) {
         log_debug("Event loop iterations: %.*s", o, b);
 }
 
-_public_ int sd_event_run(sd_event *e, uint64_t timeout) {
+int sd_event_run3(sd_event *e, uint64_t timeout, bool killme);
+int sd_event_run3(sd_event *e, uint64_t timeout, bool killme) {
         int r;
 
         assert_return(e, -EINVAL);
@@ -2675,7 +2695,7 @@ _public_ int sd_event_run(sd_event *e, uint64_t timeout) {
         r = sd_event_prepare(e);
         if (r == 0)
                 /* There was nothing? Then wait... */
-                r = sd_event_wait(e, timeout);
+                r = sd_event_wait3(e, timeout, killme);
 
         if (e->profile_delays)
                 e->last_run = now(CLOCK_MONOTONIC);
@@ -2692,7 +2712,12 @@ _public_ int sd_event_run(sd_event *e, uint64_t timeout) {
         return r;
 }
 
-_public_ int sd_event_loop(sd_event *e) {
+_public_ int sd_event_run(sd_event *e, uint64_t timeout) {
+        return sd_event_run3(e, timeout, false);
+}
+
+int sd_event_loop2(sd_event *e, bool killme);
+int sd_event_loop2(sd_event *e, bool killme) {
         int r;
 
         assert_return(e, -EINVAL);
@@ -2702,7 +2727,7 @@ _public_ int sd_event_loop(sd_event *e) {
         sd_event_ref(e);
 
         while (e->state != SD_EVENT_FINISHED) {
-                r = sd_event_run(e, (uint64_t) -1);
+                r = sd_event_run3(e, (uint64_t) -1, killme);
                 if (r < 0)
                         goto finish;
         }
@@ -2712,6 +2737,14 @@ _public_ int sd_event_loop(sd_event *e) {
 finish:
         sd_event_unref(e);
         return r;
+}
+
+_public_ int sd_event_loop(sd_event *e) {
+        return sd_event_loop2(e, false);
+}
+
+_public_ int sd_event_loop_killme(sd_event *e) {
+        return sd_event_loop2(e, true);
 }
 
 _public_ int sd_event_get_fd(sd_event *e) {
