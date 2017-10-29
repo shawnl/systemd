@@ -96,6 +96,9 @@ int sd_event_run(sd_event *e, uint64_t usec);
 int sd_event_loop(sd_event *e);
 int sd_event_exit(sd_event *e, int code);
 
+int sd_event_wait_killme(sd_event *e, uint64_t usec);
+int sd_event_loop_killme(sd_event *e);
+
 int sd_event_now(sd_event *e, clockid_t clock, uint64_t *usec);
 
 int sd_event_get_fd(sd_event *e);

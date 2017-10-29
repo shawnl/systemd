@@ -1266,4 +1266,12 @@ struct fib_rule_uid_range {
 #define AF_VSOCK 40
 #endif
 
+#ifndef PR_SET_IDLE
+#define PR_SET_IDLE 48
+#endif
+
+#ifndef PR_IDLE_MODE_KILLME
+#define PR_IDLE_MODE_KILLME 1
+#endif
+
 #include "missing_syscall.h"
